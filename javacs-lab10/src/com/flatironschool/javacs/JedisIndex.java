@@ -36,8 +36,8 @@ public class JedisIndex {
 	 * 
 	 * @return Redis key.
 	 */
-	private String urlSetKey(String term) {
-		return "URLSet:" + term;
+	private String urlKey(String term) {
+		return "URL:" + term;
 	}
 	
 	/**
@@ -45,8 +45,20 @@ public class JedisIndex {
 	 * 
 	 * @return Redis key.
 	 */
-	private String termCounterKey(String url) {
+	private String termKey(String url) {
 		return "TermCounter:" + url;
+	}
+
+	private String integerToString(int i) {
+		return Integer.toString(i);
+	}
+
+	private Integer stringToInteger(String i) {
+		return Integer.parseInt(i);
+	}
+
+	private boolean isNil(String s) {
+		return (s == null);
 	}
 
 	/**
@@ -56,8 +68,8 @@ public class JedisIndex {
 	 * @return
 	 */
 	public boolean isIndexed(String url) {
-		String redisKey = termCounterKey(url);
-		return jedis.exists(redisKey);
+		String redisKey = termKey(url);
+		return this.jedis.exists(redisKey);
 	}
 	
 	/**
@@ -68,7 +80,8 @@ public class JedisIndex {
 	 */
 	public Set<String> getURLs(String term) {
         // FILL THIS IN!
-		return null;
+		return this.jedis.smembers(termKey(term));
+		// return null;
 	}
 
     /**
@@ -79,7 +92,15 @@ public class JedisIndex {
 	 */
 	public Map<String, Integer> getCounts(String term) {
         // FILL THIS IN!
-		return null;
+        Map<String, Integer> counts_per_url = new HashMap<String, Integer>();;
+		for (String url : getURLs(term)) {
+			String count = jedis.hget(urlKey(url), term);
+			if (!isNil(count)) {
+				counts_per_url.put(url, stringToInteger(count));
+			}
+		}
+		return counts_per_url;
+		// return null;
 	}
 
     /**
@@ -91,7 +112,10 @@ public class JedisIndex {
 	 */
 	public Integer getCount(String url, String term) {
         // FILL THIS IN!
-		return null;
+        String count = this.jedis.hget(urlKey(url), term);
+        if (isNil(count)) return 0;
+        return stringToInteger(count);
+        // return null;
 	}
 
 
@@ -103,6 +127,38 @@ public class JedisIndex {
 	 */
 	public void indexPage(String url, Elements paragraphs) {
         // FILL THIS IN!
+    	
+    	// Count words in term counter
+        TermCounter tc = new TermCounter(url);
+        tc.processElements(paragraphs);
+
+        // Add this url to every term's URL set
+        Set<String> new_terms = tc.keySet();
+        Transaction t1 = jedis.multi();
+        for (String term : new_terms) {
+         	t1.sadd(termKey(term), url);
+        }
+        t1.exec();
+
+        // Delete previous data
+        Set<String> only_old_terms = jedis.hkeys(urlKey(url));
+        // build a set of terms that only appeared previously
+        only_old_terms.removeAll(new_terms);
+        Transaction t2 = jedis.multi(); 
+        for (String only_old_term : only_old_terms) {
+        	t2.hdel(urlKey(url), only_old_term);
+        }
+        t2.exec();
+
+        // Set new data in URL map
+        Transaction t3 = jedis.multi(); 
+        for (String new_term : new_terms) {
+        	Integer c = tc.get(new_term);
+        	// new_term should NEVER equal null here
+        	String count = integerToString(c);
+        	t3.hset(urlKey(url), new_term, count);
+        }
+        t3.exec();
 	}
 
 	/**
